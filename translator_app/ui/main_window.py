@@ -180,7 +180,7 @@ class MainWindow(QMainWindow):
         self.download_video = QCheckBox("영상 다운로드 포함")
         self.download_video.setChecked(True)
         self.quality_combo = QComboBox()
-        self.quality_combo.addItems(["best", "1080p", "720p"])
+        self.quality_combo.addItems(["best", "2160p", "1440p", "1080p", "720p"])
         self.output_input = QLineEdit(self.config.output_dir)
         self.output_browse = QPushButton("찾기")
         self.output_browse.clicked.connect(self.choose_output_dir)
@@ -594,7 +594,7 @@ class MainWindow(QMainWindow):
         folder = self.last_result.output_dir if self.last_result else Path(self.output_input.text())
         if not folder.exists():
             return None
-        for pattern in ("video.mp4", "video.webm", "video.mkv", "*.mp4", "*.webm", "*.mkv", "*.mov", "*.avi"):
+        for pattern in ("*.mp4", "*.webm", "*.mkv", "*.mov", "*.avi"):
             for match in sorted(folder.glob(pattern)):
                 if self._is_video_file(match):
                     return match
@@ -606,6 +606,9 @@ class MainWindow(QMainWindow):
         folder = self.last_result.output_dir if self.last_result else Path(self.output_input.text())
         if not folder.exists():
             return None
+        preferred_matches = sorted(folder.glob(f"*.{self._target_language().lower()}.srt"))
+        if preferred_matches:
+            return preferred_matches[0]
         preferred = folder / f"{self._target_language().lower()}.srt"
         if preferred.exists():
             return preferred

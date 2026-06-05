@@ -42,10 +42,12 @@ The app can download a video file and preview it with the translated SRT synchro
 - Use `Download Video Only` to download a playable video without running transcription.
 - Enable `Download video file` before `Create Subtitles` when you want preview output from the same job.
 - Use `Preview Subtitles` after both a video file and translated `.srt` exist in the result folder.
+- Result files are saved with the video title, for example `Video Title.mp4`, `Video Title.source.srt`, and `Video Title.korean.srt`.
 
 ## Notes
 
 - YouTube downloading uses `yt-dlp`.
+- High quality video downloads use `bestvideo + bestaudio` and merge through ffmpeg. The app can use `imageio-ffmpeg` from the virtual environment when system ffmpeg is unavailable.
 - Speech model files are checked under the configured model directory.
 - If `faster-whisper` is not installed, the app creates a small placeholder source subtitle so the rest of the workflow can still be tested.
 - If Ollama or the configured Gemma model is unavailable, translation falls back to preserving subtitle timing and prefixing text with the target language label.

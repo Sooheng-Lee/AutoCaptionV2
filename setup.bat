@@ -93,7 +93,7 @@ echo [Setup] Checking optional external tools...
 where ffmpeg >nul 2>nul
 if errorlevel 1 (
   echo [Warning] ffmpeg was not found.
-  echo           yt-dlp can still download audio, but ffmpeg is recommended.
+  echo           The app will use imageio-ffmpeg from the virtual environment when available.
 ) else (
   echo [OK] ffmpeg found.
 )

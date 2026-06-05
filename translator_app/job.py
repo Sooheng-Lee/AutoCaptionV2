@@ -41,8 +41,8 @@ class SubtitleJob:
             self.options.video_quality,
         )
 
-        source_path = job_dir / "source.srt"
-        translated_path = job_dir / f"{self.options.target_language.lower()}.srt"
+        source_path = job_dir / f"{title}.source.srt"
+        translated_path = job_dir / f"{title}.{self.options.target_language.lower()}.srt"
         transcriber = Transcriber(self.options.speech_model, self.options.use_gpu, speech_model_dir)
         blocks = transcriber.transcribe(media, source_path, self.progress)
 
