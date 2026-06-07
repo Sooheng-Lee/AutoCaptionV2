@@ -50,14 +50,28 @@ class JobWorker(QThread):
     completed = pyqtSignal(object)
     failed = pyqtSignal(str)
 
-    def __init__(self, options: JobOptions):
+    def __init__(self, options: list[JobOptions]):
         super().__init__()
         self.options = options
 
     def run(self) -> None:
         try:
-            job = SubtitleJob(self.options, self.progress_changed.emit)
-            self.completed.emit(job.run())
+            results = []
+            total = len(self.options)
+            for index, options in enumerate(self.options, start=1):
+                self.progress_changed.emit(
+                    "Metadata",
+                    int(((index - 1) / total) * 100),
+                    f"Starting job {index}/{total}.",
+                )
+
+                def report(stage: str, value: int, message: str) -> None:
+                    overall = int((((index - 1) + (max(0, min(100, value)) / 100)) / total) * 100)
+                    self.progress_changed.emit(stage, overall, f"[{index}/{total}] {message}")
+
+                job = SubtitleJob(options, report)
+                results.append(job.run())
+            self.completed.emit(results)
         except Exception as exc:
             self.failed.emit(str(exc))
 
@@ -139,12 +153,28 @@ class MainWindow(QMainWindow):
         url_card, url_layout = self._card("YouTube 영상 URL 입력")
         url_row = QHBoxLayout()
         self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("youtube.com/watch?v=...")
+        self.url_input.setPlaceholderText("YouTube URL을 입력하고 추가를 누르세요")
+        self.url_input.returnPressed.connect(self.add_urls)
+        self.add_url_button = QPushButton("추가")
+        self.add_url_button.clicked.connect(self.add_urls)
         self.analyze_button = QPushButton("분석")
         self.analyze_button.clicked.connect(self.analyze_url)
         url_row.addWidget(self.url_input, 1)
+        url_row.addWidget(self.add_url_button)
         url_row.addWidget(self.analyze_button)
         url_layout.addLayout(url_row)
+        self.url_list = QListWidget()
+        self.url_list.setMaximumHeight(96)
+        url_layout.addWidget(self.url_list)
+        url_tools = QHBoxLayout()
+        self.remove_url_button = QPushButton("선택 제거")
+        self.remove_url_button.clicked.connect(self.remove_selected_urls)
+        self.clear_urls_button = QPushButton("전체 삭제")
+        self.clear_urls_button.clicked.connect(self.clear_urls)
+        url_tools.addWidget(self.remove_url_button)
+        url_tools.addWidget(self.clear_urls_button)
+        url_tools.addStretch()
+        url_layout.addLayout(url_tools)
         video_box = QFrame()
         video_box.setObjectName("videoSummary")
         video_layout = QHBoxLayout(video_box)
@@ -391,19 +421,95 @@ class MainWindow(QMainWindow):
     def _set_busy(self, busy: bool) -> None:
         self.start_button.setEnabled(not busy)
         self.download_button.setEnabled(not busy)
+        self.add_url_button.setEnabled(not busy)
+        self.remove_url_button.setEnabled(not busy)
+        self.clear_urls_button.setEnabled(not busy)
 
     def choose_output_dir(self) -> None:
         selected = QFileDialog.getExistingDirectory(self, "Select output folder", self.output_input.text())
         if selected:
             self.output_input.setText(selected)
 
+    def _parse_urls(self, text: str) -> list[str]:
+        urls = []
+        for line in text.replace(",", "\n").replace(";", "\n").splitlines():
+            parts = line.split()
+            if not parts:
+                continue
+            for part in parts:
+                url = part.strip()
+                if url:
+                    urls.append(url)
+        return urls
+
+    def add_urls(self) -> None:
+        added = 0
+        existing = set(self._urls_from_list())
+        for url in self._parse_urls(self.url_input.text()):
+            if url in existing:
+                continue
+            self.url_list.addItem(url)
+            existing.add(url)
+            added += 1
+        if added:
+            self.url_input.clear()
+            self.append_log(f"Added {added} URL(s).")
+
+    def remove_selected_urls(self) -> None:
+        selected_rows = sorted({self.url_list.row(item) for item in self.url_list.selectedItems()}, reverse=True)
+        if not selected_rows:
+            QMessageBox.information(self, "No selection", "Select URL(s) to remove.")
+            return
+        for row in selected_rows:
+            self.url_list.takeItem(row)
+        self.append_log(f"Removed {len(selected_rows)} URL(s).")
+
+    def clear_urls(self) -> None:
+        count = self.url_list.count()
+        self.url_list.clear()
+        self.url_input.clear()
+        if count:
+            self.append_log(f"Cleared {count} URL(s).")
+
+    def _urls_from_list(self) -> list[str]:
+        urls = []
+        for index in range(self.url_list.count()):
+            item = self.url_list.item(index)
+            if item:
+                urls.append(item.text().strip())
+        return urls
+
+    def _urls_from_input(self) -> list[str]:
+        urls = self._urls_from_list()
+        existing = set(urls)
+        for url in self._parse_urls(self.url_input.text()):
+            if url and url not in existing:
+                urls.append(url)
+                existing.add(url)
+        return urls
+
+    def _add_pending_urls(self) -> None:
+        if self.url_input.text().strip():
+            self.add_urls()
+
+    def _selected_or_first_url(self, urls: list[str]) -> str:
+        selected = self.url_list.selectedItems()
+        if selected:
+            return selected[0].text().strip()
+        return urls[0]
+
     def analyze_url(self) -> None:
-        url = self.url_input.text().strip()
-        if not url:
+        self._add_pending_urls()
+        urls = self._urls_from_input()
+        if not urls:
             QMessageBox.warning(self, "Missing URL", "Enter a YouTube URL first.")
             return
+        url = self._selected_or_first_url(urls)
         try:
-            self.append_log("Reading YouTube metadata.")
+            if len(urls) > 1:
+                self.append_log(f"Reading metadata for 1 of {len(urls)} URLs.")
+            else:
+                self.append_log("Reading YouTube metadata.")
             metadata = YouTubeClient(Path(self.output_input.text())).fetch_metadata(url)
             self.video_title_label.setText(metadata.get("title") or "Unknown title")
             channel = metadata.get("channel") or "Unknown channel"
@@ -428,9 +534,14 @@ class MainWindow(QMainWindow):
         if self.worker and self.worker.isRunning():
             QMessageBox.information(self, "Job running", "A subtitle job is already running.")
             return
-        url = self.url_input.text().strip()
-        if not url:
+        self._add_pending_urls()
+        urls = self._urls_from_input()
+        if not urls:
             QMessageBox.warning(self, "Missing URL", "Enter a YouTube URL first.")
+            return
+        invalid_urls = [url for url in urls if not validate_youtube_url(url)]
+        if invalid_urls:
+            QMessageBox.warning(self, "Invalid URL", f"Check this YouTube URL:\n{invalid_urls[0]}")
             return
 
         self.config.output_dir = self.output_input.text().strip()
@@ -444,27 +555,30 @@ class MainWindow(QMainWindow):
         else:
             self.append_log("CPU mode is enabled for transcription.")
 
-        options = JobOptions(
-            url=url,
-            target_language=self.config.target_language,
-            subtitle_format=self.config.subtitle_format,
-            speech_model=self.config.speech_model,
-            gemma_model=self.config.gemma_model,
-            output_dir=Path(self.config.output_dir),
-            model_dir=Path(self.config.model_dir),
-            download_video=self.download_video.isChecked(),
-            video_quality=self.quality_combo.currentText(),
-            auto_download_models=self.config.auto_download_models,
-            use_gpu=self.config.use_gpu,
-            chunk_minutes=self.config.chunk_minutes,
-            max_tokens=self.config.max_tokens,
-            ollama_url=self.config.ollama_url,
-        )
+        options = [
+            JobOptions(
+                url=url,
+                target_language=self.config.target_language,
+                subtitle_format=self.config.subtitle_format,
+                speech_model=self.config.speech_model,
+                gemma_model=self.config.gemma_model,
+                output_dir=Path(self.config.output_dir),
+                model_dir=Path(self.config.model_dir),
+                download_video=self.download_video.isChecked(),
+                video_quality=self.quality_combo.currentText(),
+                auto_download_models=self.config.auto_download_models,
+                use_gpu=self.config.use_gpu,
+                chunk_minutes=self.config.chunk_minutes,
+                max_tokens=self.config.max_tokens,
+                ollama_url=self.config.ollama_url,
+            )
+            for url in urls
+        ]
 
         self.results.clear()
         self.progress.setValue(0)
         self._set_busy(True)
-        self.append_log("Starting subtitle job.")
+        self.append_log(f"Starting {len(options)} subtitle job(s).")
         self.worker = JobWorker(options)
         self.worker.progress_changed.connect(self.on_progress)
         self.worker.completed.connect(self.on_completed)
@@ -475,10 +589,14 @@ class MainWindow(QMainWindow):
         if self.download_worker and self.download_worker.isRunning():
             QMessageBox.information(self, "Download running", "A video download is already running.")
             return
-        url = self.url_input.text().strip()
-        if not url:
+        self._add_pending_urls()
+        urls = self._urls_from_input()
+        if not urls:
             QMessageBox.warning(self, "Missing URL", "Enter a YouTube URL first.")
             return
+        url = self._selected_or_first_url(urls)
+        if len(urls) > 1:
+            self.append_log("Download Video Only uses the selected URL, or the first URL if none is selected.")
 
         self.config.output_dir = self.output_input.text().strip()
         save_config(self.config)
@@ -512,7 +630,16 @@ class MainWindow(QMainWindow):
             self._refresh_style(self.model_status_gemma)
         self.append_log(f"[{stage}] {message}")
 
-    def on_completed(self, result: JobResult) -> None:
+    def on_completed(self, result: JobResult | list[JobResult]) -> None:
+        results = result if isinstance(result, list) else [result]
+        if not results:
+            self._set_busy(False)
+            self.status_label.setText("Completed")
+            self.progress.setValue(100)
+            self.append_log("No results were produced.")
+            return
+
+        result = results[-1]
         self.last_result = result
         self._set_busy(False)
         self.status_label.setText("Completed")
@@ -528,11 +655,16 @@ class MainWindow(QMainWindow):
             self.video_title_label.setText(result.metadata.get("title") or self.video_title_label.text())
             self.video_meta_label.setText(result.metadata.get("channel") or self.video_meta_label.text())
             self.video_duration_label.setText(self._format_duration(int(result.metadata.get("duration") or 0)))
-        self.append_log("Job completed.")
-        self._add_result("Source subtitle", result.source_subtitle)
-        self._add_result("Translated subtitle", result.translated_subtitle)
-        self._add_result("Media file", result.media_file)
-        self._add_result("Output folder", result.output_dir)
+        self.append_log(f"Completed {len(results)} job(s).")
+        for index, item in enumerate(results, start=1):
+            title = item.metadata.get("title") if item.metadata else None
+            prefix = f"Job {index}"
+            if title:
+                prefix = f"{prefix} - {title}"
+            self._add_result(f"{prefix} source subtitle", item.source_subtitle)
+            self._add_result(f"{prefix} translated subtitle", item.translated_subtitle)
+            self._add_result(f"{prefix} media file", item.media_file)
+            self._add_result(f"{prefix} output folder", item.output_dir)
 
     def on_failed(self, message: str) -> None:
         self._set_busy(False)
